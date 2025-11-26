@@ -38,11 +38,31 @@ function groupBy<T, K extends string | number | symbol>(items: T[], keyFn: (item
     return result;
 }
 
-function parseDisableDirective(line: string): string[] {
-    // Match: // oxlint-disable-next-line rule1, rule2, ...
+type DisableDirective = {
+    rules: string[];
+    message?: string;
+};
+
+function parseDisableDirective(line: string): DisableDirective {
+    // Match: // oxlint-disable-next-line rule1, rule2, ... -- optional message
     const match = line.match(/\/\/\s*oxlint-disable-next-line\s+(.+)/);
-    if (!match) return [];
-    return match[1].split(',').map((r) => r.trim());
+    if (!match) return { rules: [] };
+
+    const content = match[1];
+    // Check if there's a message separator (--)
+    const separatorIndex = content.indexOf(' -- ');
+    if (separatorIndex !== -1) {
+        const rulesStr = content.slice(0, separatorIndex);
+        const message = content.slice(separatorIndex + 4).trim();
+        return {
+            rules: rulesStr.split(',').map((r) => r.trim()),
+            message: message || undefined,
+        };
+    }
+
+    return {
+        rules: content.split(',').map((r) => r.trim()),
+    };
 }
 
 const BANNED_PATHS = ['node_modules', '.git'];
@@ -87,17 +107,22 @@ function run() {
                 short: 'd',
                 default: false,
             },
+            message: {
+                type: 'string',
+                short: 'm',
+            },
         },
         allowPositionals: true,
     });
 
     const targetRuleToDisable = values.rule;
     const dryRun = values['dry-run'];
+    const customMessage = values.message;
     const additionalOxlintArguments = positionals;
 
     if (!targetRuleToDisable) {
-        console.error('Usage: node script.ts --rule <plugin/rule-name> [-- <oxlint args>]');
-        console.error('Example: node script.ts --rule eslint/no-unused-vars -- src/');
+        console.error('Usage: node script.ts --rule <plugin/rule-name> [--message <message>] [-- <oxlint args>]');
+        console.error('Example: node script.ts --rule eslint/no-unused-vars --message "TODO: fix this" -- src/');
         process.exit(1);
     }
 
@@ -209,20 +234,25 @@ function run() {
 
             if (previousLine && previousLine.includes('oxlint-disable-next-line')) {
                 // Append to existing directive
-                const existingRules = parseDisableDirective(previousLine);
-                if (!existingRules.includes(targetRuleToDisable)) {
+                const existing = parseDisableDirective(previousLine);
+                if (!existing.rules.includes(targetRuleToDisable)) {
                     // Find the end of the previous line and append the rule
                     const prevLineStartOffset = lines.slice(0, previousLineIndex).join('\n').length + (previousLineIndex > 0 ? 1 : 0);
                     const prevLineEndOffset = prevLineStartOffset + previousLine.length;
 
+                    // Determine the final message: prefer existing, but use new if no existing
+                    const finalMessage = existing.message || customMessage;
+                    const messageSuffix = finalMessage ? ` -- ${finalMessage}` : '';
+
                     // Replace the entire previous line with updated directive
-                    const newDirective = `${indent}// oxlint-disable-next-line ${[...existingRules, targetRuleToDisable].join(', ')}`;
+                    const newDirective = `${indent}// oxlint-disable-next-line ${[...existing.rules, targetRuleToDisable].join(', ')}${messageSuffix}`;
                     magicString.overwrite(prevLineStartOffset, prevLineEndOffset, newDirective);
                     totalModifications++;
                 }
             } else {
                 // Add new directive
-                const directive = `${indent}// oxlint-disable-next-line ${targetRuleToDisable}\n`;
+                const messageSuffix = customMessage ? ` -- ${customMessage}` : '';
+                const directive = `${indent}// oxlint-disable-next-line ${targetRuleToDisable}${messageSuffix}\n`;
                 magicString.prependLeft(lineStartOffset, directive);
                 totalModifications++;
             }
