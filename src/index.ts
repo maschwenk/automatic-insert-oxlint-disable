@@ -114,6 +114,7 @@ function run() {
     const oxlintCommand = [
         './node_modules/.bin/oxlint',
         '--format=json',
+        '--type-aware',
         '-c oxlintrc.json',
         `-A all -D ${targetRuleToDisable}`,
         ...additionalOxlintArguments,
